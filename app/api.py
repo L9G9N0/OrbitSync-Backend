@@ -172,3 +172,38 @@ async def search_vault(
         
     except Exception as e:
         return {"error": f"Search engine failed: {str(e)}"}
+
+@router.get("/files/", tags=["Storage"])
+async def list_files():
+    """Retrieve all metadata file records from Supabase."""
+    try:
+        db_response = supabase.table("files").select("id, filename, tags, created_at").execute()
+        return db_response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database query failed: {str(e)}")
+
+@router.delete("/files/{file_id}", tags=["Storage"])
+async def delete_file(file_id: int, s3_client = Depends(get_s3_client)):
+    """Delete metadata from Supabase and corresponding binary object from R2."""
+    try:
+        db_response = supabase.table("files").select("*").eq("id", file_id).execute()
+        if not db_response.data:
+            raise HTTPException(status_code=404, detail="File not found in vault")
+        
+        file_data = db_response.data[0]
+        storage_key = file_data["storage_key"]
+        
+        # Delete from S3/R2 storage
+        await s3_client.delete_object(
+            Bucket=settings.R2_BUCKET_NAME,
+            Key=storage_key
+        )
+        
+        # Delete record from database
+        supabase.table("files").delete().eq("id", file_id).execute()
+        
+        return {"message": f"File '{file_data['filename']}' deleted successfully"}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Delete operation failed: {str(e)}")
