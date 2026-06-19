@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks
 import uuid
-from app.core.storage import get_s3_client
+from app.core.storage import get_storage_provider
 from app.core.config import settings
 from app.core.db import supabase
 from app.core.ai import generate_file_tags
@@ -26,16 +26,16 @@ def process_ai_tagging(file_id: int, filename: str):
 async def upload_to_blackhole(
     background_tasks: BackgroundTasks, # 👈 Injecting BackgroundTasks
     file: UploadFile = File(...), 
-    s3_client = Depends(get_s3_client)
+    storage = Depends(get_storage_provider)
 ):
     try:
         unique_file_id = f"{uuid.uuid4()}_{file.filename}"
         
-        # 1. Upload to MinIO
-        await s3_client.upload_fileobj(
+        # 1. Upload to MinIO/Storage backend
+        await storage.upload_file(
             file.file, 
-            settings.R2_BUCKET_NAME, 
-            unique_file_id
+            unique_file_id,
+            content_type=file.content_type
         )
         
         # 2. Insert into Supabase (Initially tags will be NULL)
@@ -63,7 +63,7 @@ async def upload_to_blackhole(
 @router.get("/download/{file_id}", tags=["Storage"])
 async def get_download_link(
     file_id: int, 
-    s3_client = Depends(get_s3_client)
+    storage = Depends(get_storage_provider)
 ):
     try:
         # Step 1: Database Check (Ledger search)
@@ -79,15 +79,11 @@ async def get_download_link(
         
         # Step 2: Generate the Presigned URL (The Golden Ticket)
         # ExpiresIn=3600 means this link will self-destruct in 1 hour
-        presigned_url = await s3_client.generate_presigned_url(
-            'get_object',
-            Params={
-                'Bucket': settings.R2_BUCKET_NAME,
-                'Key': storage_key,
-                # Ye header browser ko force karta hai ki wo UUID ki jagah original naam se file download kare
-                'ResponseContentDisposition': f'attachment; filename="{original_name}"' 
-            },
-            ExpiresIn=3600
+        presigned_url = await storage.generate_presigned_url(
+            storage_key,
+            operation='get_object',
+            expires_in=3600,
+            response_headers={'ResponseContentDisposition': f'attachment; filename="{original_name}"'}
         )
         
         return {
@@ -105,7 +101,7 @@ async def get_download_link(
 async def create_expiring_share_link(
     file_id: int, 
     expiry_minutes: int = 60, # Default to 1 hour if user doesn't specify
-    s3_client = Depends(get_s3_client)
+    storage = Depends(get_storage_provider)
 ):
     try:
         # 🛡️ SECURITY BOUNDARY CHECK (The 7-Day Limit)
@@ -128,14 +124,11 @@ async def create_expiring_share_link(
         original_name = file_data["filename"]
         
         # 2. Generate the Dynamic Presigned URL
-        presigned_url = await s3_client.generate_presigned_url(
-            'get_object',
-            Params={
-                'Bucket': settings.R2_BUCKET_NAME,
-                'Key': storage_key,
-                'ResponseContentDisposition': f'attachment; filename="{original_name}"' 
-            },
-            ExpiresIn=expiry_seconds
+        presigned_url = await storage.generate_presigned_url(
+            storage_key,
+            operation='get_object',
+            expires_in=expiry_seconds,
+            response_headers={'ResponseContentDisposition': f'attachment; filename="{original_name}"'}
         )
         
         return {
@@ -183,8 +176,8 @@ async def list_files():
         raise HTTPException(status_code=500, detail=f"Database query failed: {str(e)}")
 
 @router.delete("/files/{file_id}", tags=["Storage"])
-async def delete_file(file_id: int, s3_client = Depends(get_s3_client)):
-    """Delete metadata from Supabase and corresponding binary object from R2."""
+async def delete_file(file_id: int, storage = Depends(get_storage_provider)):
+    """Delete metadata from Supabase and corresponding binary object from the storage backend."""
     try:
         db_response = supabase.table("files").select("*").eq("id", file_id).execute()
         if not db_response.data:
@@ -193,11 +186,8 @@ async def delete_file(file_id: int, s3_client = Depends(get_s3_client)):
         file_data = db_response.data[0]
         storage_key = file_data["storage_key"]
         
-        # Delete from S3/R2 storage
-        await s3_client.delete_object(
-            Bucket=settings.R2_BUCKET_NAME,
-            Key=storage_key
-        )
+        # Delete from storage backend
+        await storage.delete_file(storage_key)
         
         # Delete record from database
         supabase.table("files").delete().eq("id", file_id).execute()
