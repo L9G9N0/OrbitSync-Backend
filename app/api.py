@@ -234,84 +234,100 @@ async def delete_file(file_id: int, storage = Depends(get_storage_provider)):
 
 @router.get("/debug/supabase/", tags=["Debug"])
 async def debug_supabase():
+    """Runtime forensics: show the exact URL the Supabase SDK will use to query Postgres."""
     try:
         import sys
-        import requests
+        import httpx
         import urllib.parse
+        import importlib.metadata
         from app.core.db import get_supabase_client
         from app.core.config import settings
 
-        # 1. Inspect settings values (securely)
+        # 1. Raw settings
         raw_url = settings.SUPABASE_URL
         raw_key = settings.SUPABASE_KEY
-        
+
         parsed_url = urllib.parse.urlparse(raw_url)
         sanitized_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-        
-        url_length = len(raw_url) if raw_url else 0
-        key_length = len(raw_key) if raw_key else 0
-        
-        # 2. Inspect active client URL
+        raw_path_suffix = parsed_url.path  # shows /rest/v1 if it was in the env var
+
+        rest_v1_in_raw = "/rest/v1" in raw_url if raw_url else False
+        trailing_slash = raw_url.endswith("/") if raw_url else False
+
+        # 2. What URL does the live SDK client actually use?
+        client_base_url = "not_initialized"
+        client_rest_url = "not_initialized"
+        client_files_url = "not_initialized"
         try:
             client = get_supabase_client()
-            # In supabase-py, supabase_url and postgrest client url are resolved
-            client_base_url = getattr(client, "supabase_url", "unknown")
-            # Defer to postgrest client
-            pg_client = getattr(client, "postgrest", None)
-            client_rest_url = getattr(pg_client, "url", "unknown") if pg_client else "unknown"
+            client_base_url = str(getattr(client, "supabase_url", "missing"))
+            pg = getattr(client, "postgrest", None)
+            # supabase-py >= 2.x stores it as base_url (yarl URL object)
+            if pg:
+                _base = getattr(pg, "base_url", None)
+                client_rest_url = str(_base) if _base is not None else "attr_missing"
+            else:
+                client_rest_url = "no_postgrest_attr"
+            client_files_url = f"{client_rest_url}files" if client_rest_url not in ("not_initialized", "no_postgrest_attr", "attr_missing") else "cannot_determine"
         except Exception as e:
-            client_base_url = f"Error: {str(e)}"
-            client_rest_url = f"Error: {str(e)}"
-            
-        # 3. Direct probe to Supabase API root using requests
-        probe_results = {}
-        if raw_url and raw_key and "placeholder" not in raw_url.lower():
-            # Clean base URL
-            import urllib.parse
-            parsed_base = urllib.parse.urlparse(raw_url.strip())
-            base_url = f"{parsed_base.scheme}://{parsed_base.netloc}"
-            
-            rest_endpoint = f"{base_url}/rest/v1/"
-            headers = {
-                "apikey": raw_key,
-                "Authorization": f"Bearer {raw_key}"
-            }
-            
-            try:
-                resp = requests.get(rest_endpoint, headers=headers, timeout=5)
-                probe_results["status_code"] = resp.status_code
-                if resp.status_code == 200:
-                    spec = resp.json()
-                    definitions = spec.get("definitions", {})
-                    probe_results["exposed_tables"] = list(definitions.keys())
-                    probe_results["info_title"] = spec.get("info", {}).get("title")
-                else:
-                    probe_results["error_body"] = resp.text[:200]
-            except Exception as ex:
-                probe_results["request_failed"] = str(ex)
+            client_base_url = f"init_error: {str(e)}"
+            client_rest_url = f"init_error: {str(e)}"
 
-        # 4. Get library versions
-        versions = {}
-        for pkg in ("supabase", "postgrest", "requests", "fastapi"):
+        # 3. Direct HTTP probe with httpx (requests not installed on Render)
+        probe_results: dict = {}
+        if raw_url and raw_key and "placeholder" not in raw_url.lower():
+            base_url = sanitized_url
+            headers = {"apikey": raw_key, "Authorization": f"Bearer {raw_key}"}
+
+            # 3a. Probe PostgREST root (returns OpenAPI schema listing tables)
+            rest_root = f"{base_url}/rest/v1/"
+            probe_results["rest_root_probed"] = rest_root
             try:
-                import importlib.metadata
+                async with httpx.AsyncClient(timeout=10) as hc:
+                    r = await hc.get(rest_root, headers=headers)
+                    probe_results["rest_root_status"] = r.status_code
+                    if r.status_code == 200:
+                        spec = r.json()
+                        probe_results["exposed_tables"] = list(spec.get("definitions", {}).keys())
+                    else:
+                        probe_results["rest_root_error_body"] = r.text[:500]
+            except Exception as ex:
+                probe_results["rest_root_exception"] = str(ex)
+
+            # 3b. Probe /files table directly
+            files_url = f"{base_url}/rest/v1/files"
+            probe_results["files_table_probed"] = files_url
+            try:
+                async with httpx.AsyncClient(timeout=10) as hc:
+                    r2 = await hc.get(files_url, headers={**headers, "Accept": "application/json"})
+                    probe_results["files_table_status"] = r2.status_code
+                    probe_results["files_table_body"] = r2.text[:500]
+            except Exception as ex2:
+                probe_results["files_table_exception"] = str(ex2)
+
+        # 4. Library versions
+        versions = {}
+        for pkg in ("supabase", "postgrest", "httpx", "fastapi"):
+            try:
                 versions[pkg] = importlib.metadata.version(pkg)
             except Exception:
-                try:
-                    mod = __import__(pkg)
-                    versions[pkg] = getattr(mod, "__version__", "unknown")
-                except Exception:
-                    versions[pkg] = "not installed"
+                versions[pkg] = "not_installed"
 
         return {
-            "settings_supabase_url": sanitized_url,
-            "raw_url_length": url_length,
-            "raw_key_length": key_length,
-            "client_supabase_url": client_base_url,
-            "client_postgrest_url": client_rest_url,
+            "commit_check": "aeed3ce",  # expected latest commit
+            "raw_url_length": len(raw_url) if raw_url else 0,
+            "raw_url_path_suffix": raw_path_suffix,
+            "rest_v1_in_raw_url": rest_v1_in_raw,
+            "trailing_slash_in_raw_url": trailing_slash,
+            "settings_supabase_url_sanitized": sanitized_url,
+            "raw_key_length": len(raw_key) if raw_key else 0,
+            "sdk_client_supabase_url": client_base_url,
+            "sdk_client_postgrest_base_url": client_rest_url,
+            "sdk_will_query_files_at": client_files_url,
             "probe_results": probe_results,
             "library_versions": versions,
-            "python_version": sys.version
+            "python_version": sys.version,
         }
     except Exception as e:
-        return {"error": f"Debug route failed: {str(e)}"}
+        import traceback
+        return {"error": f"Debug route failed: {str(e)}", "traceback": traceback.format_exc()}
