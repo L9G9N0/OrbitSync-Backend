@@ -42,3 +42,53 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+class ConfigurationError(ValueError):
+    """Raised when environment variables are missing or incorrectly configured."""
+    pass
+
+def check_env_vars():
+    import logging
+    logger = logging.getLogger("ConfigurationAudit")
+    warnings = []
+    errors = []
+    
+    # 1. Check Supabase
+    url = settings.SUPABASE_URL
+    key = settings.SUPABASE_KEY
+    if not url or "placeholder" in url.lower() or url == "https://placeholder-project.supabase.co":
+        errors.append("SUPABASE_URL is missing or contains placeholder values.")
+    elif not url.startswith("http://") and not url.startswith("https://"):
+        errors.append("SUPABASE_URL is invalid (must start with http:// or https://).")
+        
+    if not key or "placeholder" in key.lower() or key == "placeholder-anon-key":
+        errors.append("SUPABASE_KEY is missing or contains placeholder values.")
+        
+    # 2. Check Groq
+    groq_key = settings.GROQ_API_KEY
+    if not groq_key or "placeholder" in groq_key.lower() or groq_key == "placeholder-groq-key":
+        warnings.append("GROQ_API_KEY is missing or contains placeholder values. AI auto-tagging will fallback to 'untagged'.")
+        
+    # 3. Check Storage Provider
+    prov = settings.STORAGE_PROVIDER
+    if prov == "minio":
+        if settings.MINIO_ENDPOINT == "localhost":
+            warnings.append("STORAGE_PROVIDER is set to minio but MINIO_ENDPOINT is localhost. This will fail in production.")
+    elif prov == "s3":
+        if not settings.AWS_ACCESS_KEY_ID or not settings.AWS_SECRET_ACCESS_KEY or not settings.S3_BUCKET_NAME:
+            errors.append("STORAGE_PROVIDER is set to s3 but AWS/S3 credentials are not fully configured.")
+            
+    if errors:
+        logger.error("❌ PRODUCTION CONFIGURATION ERRORS DETECTED:")
+        for err in errors:
+            logger.error(f"  - {err}")
+        logger.error("The application will start, but endpoints relying on these services will fail until configured.")
+    else:
+        logger.info("✅ Core configuration parsed successfully.")
+        
+    if warnings:
+        logger.warning("⚠️ CONFIGURATION WARNINGS DETECTED:")
+        for warn in warnings:
+            logger.warning(f"  - {warn}")
+
+    return len(errors) == 0

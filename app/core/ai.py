@@ -2,11 +2,25 @@ from groq import Groq
 import json
 from app.core.config import settings
 
-groq_client = Groq(api_key=settings.GROQ_API_KEY)
+_groq_client = None
+
+def get_groq_client():
+    global _groq_client
+    if _groq_client is not None:
+        return _groq_client
+        
+    key = settings.GROQ_API_KEY
+    if not key or "placeholder" in key.lower() or key == "placeholder-groq-key":
+        raise ValueError("GROQ_API_KEY is not configured or contains a placeholder value.")
+        
+    from groq import Groq
+    _groq_client = Groq(api_key=key)
+    return _groq_client
 
 def generate_file_tags(filename: str) -> dict:
     """Agentic workflow to generate semantic JSON tags based on filename."""
     try:
+        client = get_groq_client()
         # Prompt Engineering for strict JSON
         prompt = f"""
         You are a highly intelligent file organization AI. 
@@ -18,7 +32,7 @@ def generate_file_tags(filename: str) -> dict:
         {{"tags": ["tag1", "tag2", "tag3"]}}
         """
         
-        chat_completion = groq_client.chat.completions.create(
+        chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile",
             temperature=0.1, # Low temp = highly deterministic

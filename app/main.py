@@ -1,12 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import router
+from app.core.config import check_env_vars
 
 app = FastAPI(
     title="Blackhole iCloud API", 
     version="1.0.0",
     description="Agentic Cloud Storage Engine"
 )
+
+@app.on_event("startup")
+async def startup_event():
+    check_env_vars()
 
 # 🛡️ CORS Middleware: Secure origin configuration
 app.add_middleware(

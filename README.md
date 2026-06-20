@@ -119,6 +119,12 @@ SUPABASE_KEY=your_supabase_anon_or_service_role_key
 GROQ_API_KEY=gsk_your_groq_api_key
 ```
 
+> [!NOTE]
+> **Graceful Startup Audit**: To ensure continuous availability, the backend will boot successfully and serve the `/health` endpoint even if environment keys are missing or contain placeholder values. Any configuration errors will be highlighted as clear warning/error banners in the startup logs. Relying routes (like file upload/download) will return structured HTTP 500 error messages if invoked while misconfigured.
+>
+> **Supabase Key Selection**: Since the backend executes server-to-server operations, using the Supabase `service_role` key is recommended to bypass Row-Level Security (RLS) constraints. If the `anon` key is used, make sure policies are defined on the `files` table to permit inserts, reads, updates, and deletes.
+
+
 ### 2. Launching with Docker Compose 🐳
 
 To launch the backend API and MinIO storage engine with single-command persistence, simply run:
