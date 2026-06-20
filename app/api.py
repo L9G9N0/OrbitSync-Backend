@@ -230,3 +230,90 @@ async def delete_file(file_id: int, storage = Depends(get_storage_provider)):
         raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Delete operation failed: {str(e)}")
+
+
+@router.get("/debug/supabase/", tags=["Debug"])
+async def debug_supabase():
+    try:
+        import sys
+        import requests
+        import urllib.parse
+        from app.core.db import get_supabase_client
+        from app.core.config import settings
+
+        # 1. Inspect settings values (securely)
+        raw_url = settings.SUPABASE_URL
+        raw_key = settings.SUPABASE_KEY
+        
+        parsed_url = urllib.parse.urlparse(raw_url)
+        sanitized_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+        
+        url_length = len(raw_url) if raw_url else 0
+        key_length = len(raw_key) if raw_key else 0
+        
+        # 2. Inspect active client URL
+        try:
+            client = get_supabase_client()
+            # In supabase-py, supabase_url and postgrest client url are resolved
+            client_base_url = getattr(client, "supabase_url", "unknown")
+            # Defer to postgrest client
+            pg_client = getattr(client, "postgrest", None)
+            client_rest_url = getattr(pg_client, "url", "unknown") if pg_client else "unknown"
+        except Exception as e:
+            client_base_url = f"Error: {str(e)}"
+            client_rest_url = f"Error: {str(e)}"
+            
+        # 3. Direct probe to Supabase API root using requests
+        probe_results = {}
+        if raw_url and raw_key and "placeholder" not in raw_url.lower():
+            # Clean base URL
+            base_url = raw_url.strip().rstrip('/')
+            for suffix in ("/rest/v1", "/rest/v1/"):
+                if base_url.endswith(suffix):
+                    base_url = base_url[:-len(suffix)].rstrip('/')
+                    break
+            
+            rest_endpoint = f"{base_url}/rest/v1/"
+            headers = {
+                "apikey": raw_key,
+                "Authorization": f"Bearer {raw_key}"
+            }
+            
+            try:
+                resp = requests.get(rest_endpoint, headers=headers, timeout=5)
+                probe_results["status_code"] = resp.status_code
+                if resp.status_code == 200:
+                    spec = resp.json()
+                    definitions = spec.get("definitions", {})
+                    probe_results["exposed_tables"] = list(definitions.keys())
+                    probe_results["info_title"] = spec.get("info", {}).get("title")
+                else:
+                    probe_results["error_body"] = resp.text[:200]
+            except Exception as ex:
+                probe_results["request_failed"] = str(ex)
+
+        # 4. Get library versions
+        versions = {}
+        for pkg in ("supabase", "postgrest", "requests", "fastapi"):
+            try:
+                import importlib.metadata
+                versions[pkg] = importlib.metadata.version(pkg)
+            except Exception:
+                try:
+                    mod = __import__(pkg)
+                    versions[pkg] = getattr(mod, "__version__", "unknown")
+                except Exception:
+                    versions[pkg] = "not installed"
+
+        return {
+            "settings_supabase_url": sanitized_url,
+            "raw_url_length": url_length,
+            "raw_key_length": key_length,
+            "client_supabase_url": client_base_url,
+            "client_postgrest_url": client_rest_url,
+            "probe_results": probe_results,
+            "library_versions": versions,
+            "python_version": sys.version
+        }
+    except Exception as e:
+        return {"error": f"Debug route failed: {str(e)}"}
