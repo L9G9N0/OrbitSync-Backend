@@ -267,11 +267,9 @@ async def debug_supabase():
         probe_results = {}
         if raw_url and raw_key and "placeholder" not in raw_url.lower():
             # Clean base URL
-            base_url = raw_url.strip().rstrip('/')
-            for suffix in ("/rest/v1", "/rest/v1/"):
-                if base_url.endswith(suffix):
-                    base_url = base_url[:-len(suffix)].rstrip('/')
-                    break
+            import urllib.parse
+            parsed_base = urllib.parse.urlparse(raw_url.strip())
+            base_url = f"{parsed_base.scheme}://{parsed_base.netloc}"
             
             rest_endpoint = f"{base_url}/rest/v1/"
             headers = {
