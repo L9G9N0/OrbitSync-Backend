@@ -1,11 +1,12 @@
-from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from typing import Optional
 import uuid
 from app.core.storage import get_storage_provider
 from app.core.config import settings
 from app.core.db import supabase
 from app.core.ai import generate_file_tags
-from fastapi import HTTPException # Ye import top pe add kar lena agar nahi hai toh
-from fastapi import Query
+
 router = APIRouter()
 
 # Background Worker Function
@@ -59,7 +60,39 @@ async def upload_to_blackhole(
     except Exception as e:
         return {"error": f"Failed to upload: {str(e)}"}
 
-# (Tera purana /download/ wala code yahan same rahega...)
+@router.get("/files/download-raw/{storage_key}", tags=["Storage"])
+async def download_raw_file(
+    storage_key: str,
+    filename: Optional[str] = None,
+    storage = Depends(get_storage_provider)
+):
+    try:
+        if not await storage.file_exists(storage_key):
+            raise HTTPException(status_code=404, detail="File not found in storage.")
+
+        meta = await storage.get_metadata(storage_key)
+        content_type = meta.get("content_type", "application/octet-stream")
+
+        headers = {}
+        if filename:
+            import urllib.parse
+            # Use RFC 5987 / UTF-8 encoding or safe ASCII filename fallback
+            safe_filename = urllib.parse.quote(filename)
+            headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{safe_filename}"
+        else:
+            headers["Content-Disposition"] = f'attachment; filename="{storage_key}"'
+
+        return StreamingResponse(
+            storage.download_file(storage_key),
+            media_type=content_type,
+            headers=headers
+        )
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Download proxy failed: {str(e)}")
+
+
 @router.get("/download/{file_id}", tags=["Storage"])
 async def get_download_link(
     file_id: int, 

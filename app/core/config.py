@@ -9,7 +9,7 @@ ENV_FILE_PATH = ROOT_DIR / ".env"
 
 class Settings(BaseSettings):
     # Active Storage Provider
-    STORAGE_PROVIDER: str = "minio" # 'minio', 's3', or 'local'
+    STORAGE_PROVIDER: str = "local" # 'minio', 's3', or 'local'
     LOCAL_STORAGE_DIR: str = "./local_vault_storage"
 
     # MinIO Credentials & Mappings
@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # Groq AI
     GROQ_API_KEY: str = "placeholder-groq-key"
 
+    # API and Frontend URLs
+    API_BASE_URL: str = "http://localhost:8000"
+    FRONTEND_URL: str = "http://localhost:5173"
+
     model_config = SettingsConfigDict(env_file=str(ENV_FILE_PATH), extra="ignore")
+
 
 settings = Settings()

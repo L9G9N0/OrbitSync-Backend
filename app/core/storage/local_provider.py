@@ -97,9 +97,37 @@ class LocalProvider(StorageProvider):
         expires_in: int = 3600,
         response_headers: Optional[Dict[str, str]] = None
     ) -> str:
-        # Mock presigned URLs by returning file scheme URLs
-        target_path = self._get_path(object_name)
-        return f"file://{target_path}"
+        from app.core.config import settings
+        import urllib.parse
+        base_url = settings.API_BASE_URL.rstrip('/')
+        url = f"{base_url}/files/download-raw/{object_name}"
+        
+        # Try to extract filename from response_headers
+        filename = None
+        if response_headers:
+            disp = None
+            for k, v in response_headers.items():
+                if k.lower() in ('responsecontentdisposition', 'response-content-disposition', 'content-disposition'):
+                    disp = v
+                    break
+            if disp and 'filename=' in disp:
+                try:
+                    parts = disp.split('filename=')
+                    if len(parts) > 1:
+                        fn = parts[1].strip()
+                        if fn.startswith('"') and fn.endswith('"'):
+                            fn = fn[1:-1]
+                        elif fn.startswith("'") and fn.endswith("'"):
+                            fn = fn[1:-1]
+                        filename = fn
+                except Exception:
+                    pass
+        
+        if filename:
+            url += f"?filename={urllib.parse.quote(filename)}"
+            
+        return url
+
 
     async def file_exists(
         self,
@@ -115,10 +143,14 @@ class LocalProvider(StorageProvider):
         if not os.path.exists(target_path):
             raise ObjectNotFoundError(f"File '{object_name}' not found locally.")
         
+        import mimetypes
+        content_type, _ = mimetypes.guess_type(target_path)
+        content_type = content_type or "application/octet-stream"
+        
         stat = os.stat(target_path)
         return {
             "content_length": stat.st_size,
-            "content_type": "application/octet-stream",
+            "content_type": content_type,
             "last_modified": stat.st_mtime,
             "metadata": {}
         }

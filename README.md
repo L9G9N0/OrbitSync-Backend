@@ -104,17 +104,12 @@ OrbitSync-Backend/
 Create a `.env` file in the root directory containing the credentials (see `.env.example` for reference):
 
 ```ini
-# Active Storage Provider: 'minio', 's3', or 'local'
-STORAGE_PROVIDER=minio
+# Active Storage Provider: 'local', 'minio', or 's3'
+STORAGE_PROVIDER=local
 
-# MinIO Connection Settings (active when STORAGE_PROVIDER=minio)
-MINIO_ENDPOINT=localhost
-MINIO_PORT=9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET=blackhole
-MINIO_SECURE=false
-MINIO_PUBLIC_URL=http://localhost:9000 # remap host for browser-direct presigned URLs
+# Local Storage settings
+LOCAL_STORAGE_DIR=./local_vault_storage
+API_BASE_URL=http://localhost:8000
 
 # Metadata Connection (Supabase)
 SUPABASE_URL=https://your-supabase-project.supabase.co
