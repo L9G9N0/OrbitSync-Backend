@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import type { UploadQueueItem, ActivityLog } from '../types';
+import type { UploadQueueItem, ActivityLog, ActivityType } from '../types';
 import { uploadFileWithProgress, fetchFiles, parseTags } from '../services/api';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -11,7 +11,7 @@ interface UploadContextType {
   cancelUpload: (id: string) => void;
   retryUpload: (id: string) => void;
   clearQueue: () => void;
-  logActivity: (type: ActivityLog['type'], message: string) => void;
+  logActivity: (type: ActivityType, message: string) => void;
 }
 
 const UploadContext = createContext<UploadContextType | undefined>(undefined);
@@ -22,24 +22,20 @@ export const useUpload = () => {
   return context;
 };
 
-export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({
-  children
-}) => {
+export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const queryClient = useQueryClient();
-  
-  // Keep track of ongoing XHR abort functions
   const activeUploads = useRef<{ [queueId: string]: () => void }>({});
 
-  const logActivity = (type: ActivityLog['type'], message: string) => {
+  const logActivity = (type: ActivityType, message: string) => {
     const newLog: ActivityLog = {
-      id: Math.random().toString(36).substring(7),
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       type,
       message,
       timestamp: new Date().toLocaleTimeString(),
     };
-    setActivityLogs(prev => [newLog, ...prev].slice(0, 100)); // Keep last 100 logs
+    setActivityLogs(prev => [newLog, ...prev].slice(0, 150));
   };
 
   const cancelUpload = (id: string) => {
@@ -47,63 +43,56 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({
       activeUploads.current[id]();
       delete activeUploads.current[id];
     }
+    const item = uploadQueue.find(i => i.id === id);
     setUploadQueue(prev =>
-      prev.map(item =>
-        item.id === id ? { ...item, status: 'Failed' as const, error: 'Upload cancelled by user' } : item
-      )
+      prev.map(item => item.id === id ? { ...item, status: 'Failed' as const, error: 'Cancelled' } : item)
     );
-    logActivity('upload', `Cancelled uploading ${uploadQueue.find(i => i.id === id)?.filename}`);
+    if (item) logActivity('upload', `Cancelled: ${item.filename}`);
   };
 
   const executeUpload = async (queueItem: UploadQueueItem, file: File) => {
     try {
       setUploadQueue(prev =>
-        prev.map(item => (item.id === queueItem.id ? { ...item, status: 'Uploading', progress: 0, error: undefined } : item))
+        prev.map(item => item.id === queueItem.id ? { ...item, status: 'Uploading', progress: 0, error: undefined } : item)
       );
-      logActivity('upload', `Starting upload for ${file.name}`);
+      logActivity('upload', `Uploading ${file.name}…`);
 
       const { promise, abort } = uploadFileWithProgress(file, (progress) => {
         setUploadQueue(prev =>
-          prev.map(item => (item.id === queueItem.id ? { ...item, progress } : item))
+          prev.map(item => item.id === queueItem.id ? { ...item, progress } : item)
         );
       });
 
       activeUploads.current[queueItem.id] = abort;
-
-      await promise;
+      const result = await promise;
       delete activeUploads.current[queueItem.id];
 
-      // File is uploaded to R2, now waiting for background AI processing
+      // Check if backend returned an error in the body (upload succeeds HTTP but body has error key)
+      if (result?.error) {
+        throw new Error(result.error);
+      }
+
       setUploadQueue(prev =>
-        prev.map(item =>
-          item.id === queueItem.id
-            ? { ...item, status: 'Processing', progress: 100 }
-            : item
-        )
+        prev.map(item => item.id === queueItem.id ? { ...item, status: 'Processing', progress: 100 } : item)
       );
-      logActivity('upload', `Uploaded ${file.name} successfully. Starting AI semantic profiling...`);
-      
-      // Invalidate the cache to display the new file in the dashboard list immediately
+      logActivity('upload', `Uploaded ${file.name} — AI profiling started`);
       queryClient.invalidateQueries({ queryKey: ['files'] });
 
     } catch (err: any) {
       delete activeUploads.current[queueItem.id];
       const errMsg = err.message || 'Upload failed';
       setUploadQueue(prev =>
-        prev.map(item =>
-          item.id === queueItem.id ? { ...item, status: 'Failed', error: errMsg } : item
-        )
+        prev.map(item => item.id === queueItem.id ? { ...item, status: 'Failed', error: errMsg } : item)
       );
-      toast.error(`Failed to upload ${file.name}: ${errMsg}`);
-      logActivity('upload', `Failed uploading ${file.name}: ${errMsg}`);
+      toast.error(`Failed: ${file.name} — ${errMsg}`);
+      logActivity('upload', `Failed: ${file.name} — ${errMsg}`);
     }
   };
 
   const uploadFiles = (files: FileList | File[]) => {
-    const filesArray = Array.from(files);
-    filesArray.forEach(file => {
+    Array.from(files).forEach(file => {
       const queueItem: UploadQueueItem = {
-        id: Math.random().toString(36).substring(7),
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         filename: file.name,
         size: file.size,
         progress: 0,
@@ -116,91 +105,60 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const retryUpload = (id: string) => {
     const item = uploadQueue.find(i => i.id === id);
-    if (!item) return;
-    toast.error(`File retry queued. Please re-drag/upload '${item.filename}' to trigger.`);
+    if (item) toast.info(`Re-drag '${item.filename}' to retry.`);
   };
 
   const clearQueue = () => {
     setUploadQueue(prev => prev.filter(item => item.status === 'Uploading' || item.status === 'Processing'));
   };
 
-  // Asynchronous AI Tag polling mechanism
+  // AI Tag polling — runs while items are in Processing state
   useEffect(() => {
     const processingItems = uploadQueue.filter(item => item.status === 'Processing');
     if (processingItems.length === 0) return;
 
-    let isSubscribed = true;
+    let mounted = true;
 
-    const pollAiStatus = async () => {
+    const poll = async () => {
       try {
         const latestFiles = await fetchFiles();
-        if (!isSubscribed) return;
+        if (!mounted) return;
 
-        let queueUpdated = false;
+        let changed = false;
+        const updated = uploadQueue.map(qi => {
+          if (qi.status !== 'Processing') return qi;
+          const match = latestFiles.find(f => f.filename === qi.filename && f.tags !== null);
+          if (!match) return qi;
 
-        const updatedQueue = uploadQueue.map(queueItem => {
-          if (queueItem.status !== 'Processing') return queueItem;
-
-          // Find this file in the DB records (match by filename, and look for tags)
-          const matchingRecord = latestFiles.find(
-            dbFile => dbFile.filename === queueItem.filename && dbFile.tags !== null
-          );
-
-          if (matchingRecord) {
-            queueUpdated = true;
-            const parsed = parseTags(matchingRecord.tags);
-            
-            // Trigger beautiful notification
-            toast.success(`AI completed organization for ${queueItem.filename}!`, {
-              description: `Generated tags: ${parsed.slice(0, 3).join(', ')}`,
-              duration: 5000,
-            });
-
-            logActivity('ai_tagging', `AI profiled '${queueItem.filename}' -> Tags: ${parsed.join(', ')}`);
-
-            return {
-              ...queueItem,
-              status: 'Tagged' as const,
-              tags: parsed,
-              dbId: matchingRecord.id
-            };
-          }
-
-          return queueItem;
+          changed = true;
+          const parsed = parseTags(match.tags);
+          toast.success(`AI tagged: ${qi.filename}`, {
+            description: parsed.slice(0, 3).join(', '),
+            duration: 5000,
+          });
+          logActivity('ai_tagging', `AI tagged '${qi.filename}': ${parsed.join(', ')}`);
+          return { ...qi, status: 'Tagged' as const, tags: parsed, dbId: match.id };
         });
 
-        if (queueUpdated) {
-          setUploadQueue(updatedQueue);
-          // Invalidate the cache to display new tags in the dashboard list immediately
+        if (changed) {
+          setUploadQueue(updated);
           queryClient.invalidateQueries({ queryKey: ['files'] });
         }
-      } catch (err) {
-        console.error('Failed to poll background AI updates:', err);
+      } catch {
+        // silent — network blip during poll
       }
     };
 
-    const intervalId = setInterval(pollAiStatus, 3500);
-
+    const interval = setInterval(poll, 3500);
     return () => {
-      isSubscribed = false;
-      clearInterval(intervalId);
+      mounted = false;
+      clearInterval(interval);
     };
   }, [uploadQueue, queryClient]);
 
   return (
-    <UploadContext.Provider
-      value={{
-        uploadQueue,
-        activityLogs,
-        uploadFiles,
-        cancelUpload,
-        retryUpload,
-        clearQueue,
-        logActivity,
-      }}
-    >
+    <UploadContext.Provider value={{ uploadQueue, activityLogs, uploadFiles, cancelUpload, retryUpload, clearQueue, logActivity }}>
       {children}
     </UploadContext.Provider>
   );
 };
-
