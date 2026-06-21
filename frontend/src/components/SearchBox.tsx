@@ -8,22 +8,21 @@ interface SearchBoxProps {
 
 export const SearchBox: React.FC<SearchBoxProps> = ({ onSearch, isLoading }) => {
   const [query, setQuery] = useState('');
-  const [history, setHistory] = useState<string[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const historyRef = useRef<HTMLDivElement>(null);
-
-  // Load history from localStorage
-  useEffect(() => {
+  const [history, setHistory] = useState<string[]>(() => {
     const saved = localStorage.getItem('blackhole_search_history');
     if (saved) {
       try {
-        setHistory(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
       } catch (e) {
         console.error(e);
       }
     }
-  }, []);
+    return [];
+  });
+  const [showHistory, setShowHistory] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
 
   // Keyboard shortcut listener: '/' focuses search input
   useEffect(() => {
@@ -76,7 +75,7 @@ export const SearchBox: React.FC<SearchBoxProps> = ({ onSearch, isLoading }) => 
     }, 450); // 450ms debounce delay
 
     return () => clearTimeout(handler);
-  }, [query]);
+  }, [query, onSearch]);
 
   const handleClear = () => {
     setQuery('');

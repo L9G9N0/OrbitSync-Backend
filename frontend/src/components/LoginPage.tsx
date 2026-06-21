@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Brain, Mail, Lock, Eye, EyeOff, Loader2, AlertCircle, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '../store/AuthContext';
@@ -15,11 +15,12 @@ export const LoginPage: React.FC = () => {
   const [localError, setLocalError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  useEffect(() => {
+  const handleModeChange = (newMode: AuthMode) => {
+    setMode(newMode);
     clearError();
     setLocalError(null);
     setSuccessMessage(null);
-  }, [mode, clearError]);
+  };
 
   const displayError = localError || error;
 
@@ -86,7 +87,7 @@ export const LoginPage: React.FC = () => {
             {(['login', 'signup'] as AuthMode[]).map((m) => (
               <button
                 key={m}
-                onClick={() => setMode(m)}
+                onClick={() => handleModeChange(m)}
                 className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all cursor-pointer capitalize ${
                   mode === m
                     ? 'bg-purple-600 text-white shadow-lg shadow-purple-900/40'
@@ -219,7 +220,7 @@ export const LoginPage: React.FC = () => {
                 <div className="text-right">
                   <button
                     type="button"
-                    onClick={() => setMode('reset')}
+                    onClick={() => handleModeChange('reset')}
                     className="text-xs text-purple-400 hover:text-purple-300 transition-colors cursor-pointer"
                   >
                     Forgot password?
@@ -249,7 +250,7 @@ export const LoginPage: React.FC = () => {
               {mode === 'reset' && (
                 <button
                   type="button"
-                  onClick={() => setMode('login')}
+                  onClick={() => handleModeChange('login')}
                   className="w-full text-xs text-gray-500 hover:text-gray-300 transition-colors mt-2 cursor-pointer"
                 >
                   ← Back to Sign In

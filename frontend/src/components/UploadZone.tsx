@@ -51,7 +51,7 @@ export const UploadZone: React.FC = () => {
       onClick={triggerFileInput}
       className={`relative border-2 border-dashed rounded-2xl p-10 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-300 select-none group min-height-[220px] ${
         isDragActive
-          ? 'border-purple-500 bg-purple-950/10 shadow-[0_0_30px_rgba(139,92,246,0.15)]Scale(1.01)'
+          ? 'border-purple-500 bg-purple-950/10 shadow-[0_0_30px_rgba(139,92,246,0.15)] scale-[1.01]'
           : hasActiveUpload
           ? 'border-indigo-500/60 bg-indigo-950/5 animate-[pulse_2s_infinite]'
           : 'border-purple-950/40 bg-[#0b0a12]/60 hover:border-purple-800/80 hover:bg-purple-950/5'

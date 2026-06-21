@@ -3,7 +3,7 @@ import urllib.parse
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, Header
 from fastapi.responses import StreamingResponse
 
 from app.core.ai import generate_file_tags
@@ -12,6 +12,25 @@ from app.core.storage import get_storage_provider
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+async def get_current_user(authorization: Optional[str] = Header(None)) -> str:
+    """Extract and verify JWT from Authorization header using Supabase Auth."""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Authorization Header")
+    
+    parts = authorization.split(" ")
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid Authorization header format. Expected 'Bearer <token>'")
+    
+    token = parts[1]
+    try:
+        user_response = supabase.auth.get_user(jwt=token)
+        if not user_response or not user_response.user:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        return user_response.user.id
+    except Exception as e:
+        logger.error(f"JWT verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Authentication failed")
 
 
 # ─── Background AI Tagging Worker ────────────────────────────────────────────
@@ -33,6 +52,7 @@ def _process_ai_tagging(file_id: int, filename: str) -> None:
 async def upload_to_blackhole(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user),
     storage=Depends(get_storage_provider),
 ):
     """Upload a file to storage and queue AI semantic tagging."""
@@ -50,6 +70,7 @@ async def upload_to_blackhole(
         db_response = supabase.table("files").insert({
             "filename": file.filename,
             "storage_key": storage_key,
+            "user_id": user_id,
         }).execute()
         new_row_id = db_response.data[0]["id"]
     except Exception as e:
@@ -108,10 +129,14 @@ async def download_raw_file(
 # ─── Presigned Download URL ───────────────────────────────────────────────────
 
 @router.get("/download/{file_id}", tags=["Storage"])
-async def get_download_link(file_id: int, storage=Depends(get_storage_provider)):
+async def get_download_link(
+    file_id: int,
+    user_id: str = Depends(get_current_user),
+    storage=Depends(get_storage_provider),
+):
     """Generate a short-lived presigned download URL (expires in 1 hour)."""
     try:
-        db_response = supabase.table("files").select("*").eq("id", file_id).execute()
+        db_response = supabase.table("files").select("*").eq("id", file_id).eq("user_id", user_id).execute()
         if not db_response.data:
             raise HTTPException(status_code=404, detail="File not found in vault.")
 
@@ -143,6 +168,7 @@ async def get_download_link(file_id: int, storage=Depends(get_storage_provider))
 async def create_expiring_share_link(
     file_id: int,
     expiry_minutes: int = 60,
+    user_id: str = Depends(get_current_user),
     storage=Depends(get_storage_provider),
 ):
     """Generate a short-lived presigned share URL with configurable expiry."""
@@ -152,7 +178,7 @@ async def create_expiring_share_link(
         raise HTTPException(status_code=400, detail="Maximum share duration is 7 days (10080 minutes).")
 
     try:
-        db_response = supabase.table("files").select("*").eq("id", file_id).execute()
+        db_response = supabase.table("files").select("*").eq("id", file_id).eq("user_id", user_id).execute()
         if not db_response.data:
             raise HTTPException(status_code=404, detail="File not found in vault.")
 
@@ -183,12 +209,14 @@ async def create_expiring_share_link(
 @router.get("/search/", tags=["Search"])
 async def search_vault(
     query: str = Query(..., description="Tag or keyword to search for"),
+    user_id: str = Depends(get_current_user),
 ):
-    """Case-insensitive search across file tags using PostgreSQL ILIKE."""
+    """Case-insensitive search across file tags using PostgreSQL ILIKE, filtered by user_id."""
     try:
         db_response = (
             supabase.table("files")
             .select("id, filename, tags, created_at")
+            .eq("user_id", user_id)
             .ilike("tags", f"%{query}%")
             .execute()
         )
@@ -201,12 +229,13 @@ async def search_vault(
 # ─── List Files ───────────────────────────────────────────────────────────────
 
 @router.get("/files/", tags=["Storage"])
-async def list_files():
-    """Retrieve all file metadata records from Supabase."""
+async def list_files(user_id: str = Depends(get_current_user)):
+    """Retrieve all file metadata records from Supabase for the authenticated user."""
     try:
         db_response = (
             supabase.table("files")
             .select("id, filename, tags, created_at")
+            .eq("user_id", user_id)
             .order("created_at", desc=True)
             .execute()
         )
@@ -218,10 +247,14 @@ async def list_files():
 # ─── Delete File ─────────────────────────────────────────────────────────────
 
 @router.delete("/files/{file_id}", tags=["Storage"])
-async def delete_file(file_id: int, storage=Depends(get_storage_provider)):
+async def delete_file(
+    file_id: int,
+    user_id: str = Depends(get_current_user),
+    storage=Depends(get_storage_provider),
+):
     """Delete a file from both storage and the metadata database."""
     try:
-        db_response = supabase.table("files").select("*").eq("id", file_id).execute()
+        db_response = supabase.table("files").select("*").eq("id", file_id).eq("user_id", user_id).execute()
         if not db_response.data:
             raise HTTPException(status_code=404, detail="File not found in vault.")
 
@@ -232,7 +265,7 @@ async def delete_file(file_id: int, storage=Depends(get_storage_provider)):
         await storage.delete_file(storage_key)
 
         # Delete metadata record
-        supabase.table("files").delete().eq("id", file_id).execute()
+        supabase.table("files").delete().eq("id", file_id).eq("user_id", user_id).execute()
 
         return {"message": f"File '{file_data['filename']}' deleted successfully."}
     except HTTPException:

@@ -97,6 +97,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         size: file.size,
         progress: 0,
         status: 'Uploading',
+        created_at: new Date().toISOString(),
       };
       setUploadQueue(prev => [queueItem, ...prev]);
       executeUpload(queueItem, file);

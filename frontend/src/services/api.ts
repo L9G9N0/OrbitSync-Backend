@@ -1,4 +1,5 @@
 import type { FileRecord } from '../types';
+import { supabase } from '../lib/supabase';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -39,8 +40,19 @@ export function parseTags(tagsField: any): string[] {
   return tagsStr.split(',').map(t => t.trim()).filter(Boolean);
 }
 
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 export async function fetchFiles(): Promise<FileRecord[]> {
-  const res = await fetch(`${API_BASE}/files/`);
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${API_BASE}/files/`, { headers });
   if (!res.ok) {
     throw new Error('Failed to retrieve vault files');
   }
@@ -48,8 +60,10 @@ export async function fetchFiles(): Promise<FileRecord[]> {
 }
 
 export async function deleteFile(fileId: number): Promise<{ message: string }> {
+  const headers = await getAuthHeaders();
   const res = await fetch(`${API_BASE}/files/${fileId}`, {
     method: 'DELETE',
+    headers,
   });
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
@@ -59,7 +73,8 @@ export async function deleteFile(fileId: number): Promise<{ message: string }> {
 }
 
 export async function getDownloadLink(fileId: number): Promise<string> {
-  const res = await fetch(`${API_BASE}/download/${fileId}`);
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${API_BASE}/download/${fileId}`, { headers });
   if (!res.ok) {
     throw new Error('Failed to generate download ticket');
   }
@@ -71,7 +86,8 @@ export async function getDownloadLink(fileId: number): Promise<string> {
 }
 
 export async function getShareLink(fileId: number, expiryMinutes: number): Promise<{ share_url: string; expires_in_minutes: number }> {
-  const res = await fetch(`${API_BASE}/share/${fileId}?expiry_minutes=${expiryMinutes}`);
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${API_BASE}/share/${fileId}?expiry_minutes=${expiryMinutes}`, { headers });
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
     throw new Error(errData.detail || 'Failed to generate expiring link');
@@ -90,7 +106,8 @@ export async function searchVault(query: string): Promise<FileRecord[]> {
   if (!query.trim()) {
     return fetchFiles();
   }
-  const res = await fetch(`${API_BASE}/search/?query=${encodeURIComponent(query)}`);
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${API_BASE}/search/?query=${encodeURIComponent(query)}`, { headers });
   if (!res.ok) {
     throw new Error('Failed to query semantic search engine');
   }
@@ -107,45 +124,55 @@ export function uploadFileWithProgress(
 ): { promise: Promise<any>; abort: () => void } {
   const xhr = new XMLHttpRequest();
   
-  const promise = new Promise((resolve, reject) => {
-    xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) {
-        const percentComplete = Math.round((event.loaded / event.total) * 100);
-        onProgress(percentComplete);
-      }
-    });
+  const promise = (async () => {
+    const headers = await getAuthHeaders();
 
-    xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const response = JSON.parse(xhr.responseText);
-          if (response.error) {
-            reject(new Error(response.error));
-          } else {
-            resolve(response);
-          }
-        } catch (e) {
-          resolve({ message: 'Upload completed' });
+    return new Promise((resolve, reject) => {
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) {
+          const percentComplete = Math.round((event.loaded / event.total) * 100);
+          onProgress(percentComplete);
         }
-      } else {
-        reject(new Error(`Server responded with code ${xhr.status}`));
-      }
+      });
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const response = JSON.parse(xhr.responseText);
+            if (response.error) {
+              reject(new Error(response.error));
+            } else {
+              resolve(response);
+            }
+          } catch (e) {
+            resolve({ message: 'Upload completed' });
+          }
+        } else {
+          reject(new Error(`Server responded with code ${xhr.status}`));
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        reject(new Error('Network error during file upload'));
+      });
+
+      xhr.addEventListener('abort', () => {
+        reject(new Error('Upload cancelled by user'));
+      });
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      xhr.open('POST', `${API_BASE}/upload/`, true);
+      
+      // Inject Authorization headers
+      Object.entries(headers).forEach(([key, value]) => {
+        xhr.setRequestHeader(key, value);
+      });
+      
+      xhr.send(formData);
     });
-
-    xhr.addEventListener('error', () => {
-      reject(new Error('Network error during file upload'));
-    });
-
-    xhr.addEventListener('abort', () => {
-      reject(new Error('Upload cancelled by user'));
-    });
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    xhr.open('POST', `${API_BASE}/upload/`, true);
-    xhr.send(formData);
-  });
+  })();
 
   return {
     promise,

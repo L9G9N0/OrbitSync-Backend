@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   FileText, Image, Video, Music, FileCode, FolderArchive, File,
-  Download, Share2, Trash2, BrainCircuit, Calendar, MoreVertical, Copy, Check, Link
+  Download, Share2, Trash2, BrainCircuit, Calendar, MoreVertical, Check, Link
 } from 'lucide-react';
 import type { FileRecord, UploadStatus } from '../types';
 import { getDownloadLink, deleteFile, parseTags } from '../services/api';

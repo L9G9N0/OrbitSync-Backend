@@ -17,6 +17,7 @@ export interface UploadQueueItem {
   error?: string;
   tags?: string[];
   dbId?: number;
+  created_at?: string;
 }
 
 export type ActivityType =

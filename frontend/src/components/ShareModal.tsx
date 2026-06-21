@@ -24,20 +24,20 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const [shareUrl, setShareUrl] = useState('');
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    if (!isOpen) {
-      setShareUrl('');
-      setCopied(false);
-    }
-  }, [isOpen]);
+  const handleClose = () => {
+    setShareUrl('');
+    setCopied(false);
+    onClose();
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) onClose();
+      if (e.key === 'Escape' && isOpen) handleClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const handleGenerateLink = async () => {
     setIsGenerating(true);
@@ -72,7 +72,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={onClose}
+            onClick={handleClose}
             className="absolute inset-0 bg-black/60 backdrop-blur-md"
           />
 
@@ -91,7 +91,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                 <Clock className="w-5 h-5 text-purple-400" /> Share Secure Ticket
               </h3>
               <button
-                onClick={onClose}
+                onClick={handleClose}
                 className="text-gray-400 hover:text-white p-1.5 hover:bg-purple-950/40 rounded-lg transition-colors cursor-pointer"
                 aria-label="Close dialog"
               >

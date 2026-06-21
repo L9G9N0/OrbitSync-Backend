@@ -11,7 +11,7 @@ interface FileListProps {
   error: Error | null;
   onShareClick: (fileId: number, filename: string) => void;
   onRefreshNeeded: () => void;
-  onActivityLogged: (message: string) => void;
+  onActivityLogged: (type: string, message: string) => void;
   searchQuery: string;
 }
 
@@ -77,15 +77,23 @@ export const FileList: React.FC<FileListProps> = ({
   // Map upload queue items into temporary FileRecord shapes for consistent card rendering
   const optimisticFiles: { file: FileRecord; statusOverride: UploadQueueItem['status'] }[] = uploadQueue
     .filter((q) => q.status === 'Uploading' || q.status === 'Processing' || q.status === 'Failed')
-    .map((q) => ({
-      file: {
-        id: -Math.floor(Math.random() * 100000), // Negative dummy IDs
-        filename: q.filename,
-        tags: q.tags || null,
-        created_at: new Date().toISOString(),
-      },
-      statusOverride: q.status,
-    }));
+    .map((q) => {
+      let hash = 0;
+      for (let i = 0; i < q.id.length; i++) {
+        hash = (hash << 5) - hash + q.id.charCodeAt(i);
+        hash |= 0;
+      }
+      const deterministicId = -Math.abs(hash || 1);
+      return {
+        file: {
+          id: deterministicId,
+          filename: q.filename,
+          tags: q.tags || null,
+          created_at: q.created_at || '1970-01-01T00:00:00.000Z',
+        },
+        statusOverride: q.status,
+      };
+    });
 
   // Combine and sort
   // DB files are sorted by creation date (newest first). Let's make sure our combined list is sorted similarly.
