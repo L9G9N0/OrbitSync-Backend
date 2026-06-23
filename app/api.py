@@ -244,6 +244,32 @@ async def list_files(user_id: str = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Database query failed: {e}")
 
 
+# ─── File Tag Status Polling (Optimized Query) ──────────────────────────────
+
+@router.get("/files/status/", tags=["Storage"])
+async def get_files_status(
+    ids: str = Query(..., description="Comma-separated list of file IDs to query"),
+    user_id: str = Depends(get_current_user),
+):
+    """Retrieve minimal status/tags fields for specific file IDs (reduces client poll payload)."""
+    try:
+        id_list = [int(x.strip()) for x in ids.split(",") if x.strip().isdigit()]
+        if not id_list:
+            return []
+
+        db_response = (
+            supabase.table("files")
+            .select("id, tags")
+            .eq("user_id", user_id)
+            .in_("id", id_list)
+            .execute()
+        )
+        return db_response.data or []
+    except Exception as e:
+        logger.error(f"Status check failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch statuses: {e}")
+
+
 # ─── Delete File ─────────────────────────────────────────────────────────────
 
 @router.delete("/files/{file_id}", tags=["Storage"])
@@ -272,29 +298,3 @@ async def delete_file(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Delete failed: {e}")
-
-
-# ─── File Tag Status Polling (Optimized Query) ──────────────────────────────
-
-@router.get("/files/status/", tags=["Storage"])
-async def get_files_status(
-    ids: str = Query(..., description="Comma-separated list of file IDs to query"),
-    user_id: str = Depends(get_current_user),
-):
-    """Retrieve minimal status/tags fields for specific file IDs (reduces client poll payload)."""
-    try:
-        id_list = [int(x.strip()) for x in ids.split(",") if x.strip().isdigit()]
-        if not id_list:
-            return []
-
-        db_response = (
-            supabase.table("files")
-            .select("id, tags")
-            .eq("user_id", user_id)
-            .in_("id", id_list)
-            .execute()
-        )
-        return db_response.data or []
-    except Exception as e:
-        logger.error(f"Status check failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch statuses: {e}")
