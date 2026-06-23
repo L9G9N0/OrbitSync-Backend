@@ -90,6 +90,7 @@ export const FileList: React.FC<FileListProps> = ({
           filename: q.filename,
           tags: q.tags || null,
           created_at: q.created_at || '1970-01-01T00:00:00.000Z',
+          queueId: q.id,
         },
         statusOverride: q.status,
       };

@@ -4,6 +4,7 @@ export interface FileRecord {
   tags: string | string[] | null;
   created_at: string;
   storage_key?: string;
+  queueId?: string;
 }
 
 export type UploadStatus = 'Uploading' | 'Uploaded' | 'Processing' | 'Tagged' | 'Failed';

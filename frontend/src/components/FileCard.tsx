@@ -3,11 +3,12 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   FileText, Image, Video, Music, FileCode, FolderArchive, File,
-  Download, Share2, Trash2, BrainCircuit, Calendar, MoreVertical, Check, Link
+  Download, Share2, Trash2, BrainCircuit, Calendar, MoreVertical, Check, Link, RefreshCw
 } from 'lucide-react';
 import type { FileRecord, UploadStatus } from '../types';
 import { getDownloadLink, deleteFile, parseTags } from '../services/api';
 import { toast } from 'sonner';
+import { useUpload } from '../store/UploadContext';
 
 interface FileCardProps {
   file: FileRecord;
@@ -167,6 +168,7 @@ export const FileCard: React.FC<FileCardProps> = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const [copied, setCopied] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const { retryUpload, cancelUpload } = useUpload();
 
   const closeMenu = useCallback(() => setMenuAnchor(null), []);
 
@@ -226,6 +228,14 @@ export const FileCard: React.FC<FileCardProps> = ({
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
     closeMenu();
+    if (file.queueId) {
+      const status: UploadStatus = statusOverride || (parseTags(file.tags).length > 0 ? 'Tagged' : 'Processing');
+      if (status === 'Uploading' || status === 'Processing') {
+        if (!window.confirm(`Cancel active upload for '${file.filename}'?`)) return;
+      }
+      cancelUpload(file.queueId);
+      return;
+    }
     if (!window.confirm(`Delete '${file.filename}' permanently? This cannot be undone.`)) return;
     setIsDeleting(true);
     try {
@@ -237,6 +247,14 @@ export const FileCard: React.FC<FileCardProps> = ({
       toast.error(err.message || 'Delete failed');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleRetryUpload = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    closeMenu();
+    if (file.queueId) {
+      retryUpload(file.queueId);
     }
   };
 
@@ -354,33 +372,54 @@ export const FileCard: React.FC<FileCardProps> = ({
       <AnimatePresence>
         {menuAnchor && (
           <ContextMenu anchorRect={menuAnchor} onClose={closeMenu}>
-            <MenuItem
-              icon={<Download className="w-3.5 h-3.5 text-purple-400" />}
-              label={isDownloading ? 'Fetching…' : 'Download'}
-              onClick={handleDownload}
-              disabled={isDownloading}
-            />
-            <MenuItem
-              icon={<Share2 className="w-3.5 h-3.5 text-indigo-400" />}
-              label="Share link"
-              onClick={handleShare}
-            />
-            <MenuItem
-              icon={copied
-                ? <Check className="w-3.5 h-3.5 text-emerald-400" />
-                : <Link className="w-3.5 h-3.5 text-blue-400" />
-              }
-              label={copied ? 'Copied!' : 'Copy direct URL'}
-              onClick={handleCopyLink}
-            />
-            <div className="border-t border-white/5 my-1 mx-1" />
-            <MenuItem
-              icon={<Trash2 className="w-3.5 h-3.5" />}
-              label={isDeleting ? 'Deleting…' : 'Delete file'}
-              onClick={handleDelete}
-              disabled={isDeleting}
-              variant="danger"
-            />
+            {status === 'Failed' ? (
+              <>
+                <MenuItem
+                  icon={<RefreshCw className="w-3.5 h-3.5 text-purple-400" />}
+                  label="Retry upload"
+                  onClick={handleRetryUpload}
+                />
+                <div className="border-t border-white/5 my-1 mx-1" />
+                <MenuItem
+                  icon={<Trash2 className="w-3.5 h-3.5" />}
+                  label="Remove card"
+                  onClick={handleDelete}
+                  variant="danger"
+                />
+              </>
+            ) : (
+              <>
+                <MenuItem
+                  icon={<Download className="w-3.5 h-3.5 text-purple-400" />}
+                  label={isDownloading ? 'Fetching…' : 'Download'}
+                  onClick={handleDownload}
+                  disabled={isDownloading || status === 'Uploading' || status === 'Processing'}
+                />
+                <MenuItem
+                  icon={<Share2 className="w-3.5 h-3.5 text-indigo-400" />}
+                  label="Share link"
+                  onClick={handleShare}
+                  disabled={status === 'Uploading' || status === 'Processing'}
+                />
+                <MenuItem
+                  icon={copied
+                    ? <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    : <Link className="w-3.5 h-3.5 text-blue-400" />
+                  }
+                  label={copied ? 'Copied!' : 'Copy direct URL'}
+                  onClick={handleCopyLink}
+                  disabled={status === 'Uploading' || status === 'Processing'}
+                />
+                <div className="border-t border-white/5 my-1 mx-1" />
+                <MenuItem
+                  icon={<Trash2 className="w-3.5 h-3.5" />}
+                  label={status === 'Uploading' || status === 'Processing' ? 'Cancel upload' : 'Delete file'}
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  variant="danger"
+                />
+              </>
+            )}
           </ContextMenu>
         )}
       </AnimatePresence>

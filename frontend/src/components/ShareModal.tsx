@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Copy, Check, Clock, ShieldAlert } from 'lucide-react';
 import { getShareLink } from '../services/api';
@@ -23,6 +23,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [shareUrl, setShareUrl] = useState('');
   const [copied, setCopied] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
 
   const handleClose = () => {
     setShareUrl('');
@@ -37,6 +38,47 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const modal = modalRef.current;
+    if (!modal) return;
+
+    const focusable = modal.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    if (focusable.length > 0) {
+      setTimeout(() => focusable[0].focus(), 50);
+    }
+
+    const handleTab = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+
+      const focusableElements = modal.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusableElements.length === 0) return;
+
+      const first = focusableElements[0];
+      const last = focusableElements[focusableElements.length - 1];
+
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          last.focus();
+          e.preventDefault();
+        }
+      } else {
+        if (document.activeElement === last) {
+          first.focus();
+          e.preventDefault();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleTab);
+    return () => window.removeEventListener('keydown', handleTab);
   }, [isOpen]);
 
   const handleGenerateLink = async () => {
@@ -77,17 +119,21 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           />
 
           <motion.div
+            ref={modalRef}
             initial={{ opacity: 0, scale: 0.95, y: 15 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 15 }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             className="relative w-full max-w-md bg-[#0c0a13] border border-purple-900/40 rounded-2xl p-6 shadow-2xl z-10 overflow-hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="share-modal-title"
           >
             <div className="absolute -top-16 -left-16 w-32 h-32 bg-purple-500/10 rounded-full filter blur-2xl pointer-events-none" />
             <div className="absolute -bottom-16 -right-16 w-32 h-32 bg-pink-500/10 rounded-full filter blur-2xl pointer-events-none" />
 
             <div className="flex items-center justify-between mb-4 border-b border-purple-950/30 pb-3">
-              <h3 className="text-base font-bold text-gray-100 flex items-center gap-2">
+              <h3 id="share-modal-title" className="text-base font-bold text-gray-100 flex items-center gap-2">
                 <Clock className="w-5 h-5 text-purple-400" /> Share Secure Ticket
               </h3>
               <button

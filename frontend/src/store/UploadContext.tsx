@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import type { UploadQueueItem, ActivityLog, ActivityType } from '../types';
-import { uploadFileWithProgress, fetchFiles, parseTags } from '../services/api';
+import { uploadFileWithProgress, fetchFiles, parseTags, fetchFilesStatus } from '../services/api';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -27,6 +27,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const queryClient = useQueryClient();
   const activeUploads = useRef<{ [queueId: string]: () => void }>({});
+  const fileObjects = useRef<{ [queueId: string]: File }>({});
 
   const logActivity = (type: ActivityType, message: string) => {
     const newLog: ActivityLog = {
@@ -43,6 +44,7 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       activeUploads.current[id]();
       delete activeUploads.current[id];
     }
+    delete fileObjects.current[id];
     const item = uploadQueue.find(i => i.id === id);
     setUploadQueue(prev =>
       prev.map(item => item.id === id ? { ...item, status: 'Failed' as const, error: 'Cancelled' } : item)
@@ -66,14 +68,17 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       activeUploads.current[queueItem.id] = abort;
       const result = await promise;
       delete activeUploads.current[queueItem.id];
+      delete fileObjects.current[queueItem.id];
 
       // Check if backend returned an error in the body (upload succeeds HTTP but body has error key)
       if (result?.error) {
         throw new Error(result.error);
       }
 
+      const dbId = result?.file_id;
+
       setUploadQueue(prev =>
-        prev.map(item => item.id === queueItem.id ? { ...item, status: 'Processing', progress: 100 } : item)
+        prev.map(item => item.id === queueItem.id ? { ...item, status: 'Processing', progress: 100, dbId } : item)
       );
       logActivity('upload', `Uploaded ${file.name} — AI profiling started`);
       queryClient.invalidateQueries({ queryKey: ['files'] });
@@ -91,8 +96,10 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const uploadFiles = (files: FileList | File[]) => {
     Array.from(files).forEach(file => {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      fileObjects.current[id] = file;
       const queueItem: UploadQueueItem = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id,
         filename: file.name,
         size: file.size,
         progress: 0,
@@ -106,7 +113,12 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const retryUpload = (id: string) => {
     const item = uploadQueue.find(i => i.id === id);
-    if (item) toast.info(`Re-drag '${item.filename}' to retry.`);
+    const file = fileObjects.current[id];
+    if (item && file) {
+      executeUpload(item, file);
+    } else if (item) {
+      toast.info(`File source reference lost. Re-drag '${item.filename}' to retry.`);
+    }
   };
 
   const clearQueue = () => {
@@ -122,13 +134,28 @@ export const UploadProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const poll = async () => {
       try {
-        const latestFiles = await fetchFiles();
+        const hasAllIds = processingItems.every(item => item.dbId !== undefined);
+        let statusList: { id: number; tags: any; filename?: string }[] = [];
+
+        if (hasAllIds) {
+          const idsToPoll = processingItems.map(item => item.dbId as number);
+          statusList = await fetchFilesStatus(idsToPoll);
+        } else {
+          // Fallback: poll full list
+          const allFiles = await fetchFiles();
+          statusList = allFiles.map(f => ({ id: f.id, tags: f.tags, filename: f.filename }));
+        }
+
         if (!mounted) return;
 
         let changed = false;
         const updated = uploadQueue.map(qi => {
           if (qi.status !== 'Processing') return qi;
-          const match = latestFiles.find(f => f.filename === qi.filename && f.tags !== null);
+          
+          const match = qi.dbId !== undefined
+            ? statusList.find(f => f.id === qi.dbId && f.tags !== null)
+            : statusList.find(f => f.filename === qi.filename && f.tags !== null);
+            
           if (!match) return qi;
 
           changed = true;

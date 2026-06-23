@@ -54,7 +54,8 @@ export async function fetchFiles(): Promise<FileRecord[]> {
   const headers = await getAuthHeaders();
   const res = await fetch(`${API_BASE}/files/`, { headers });
   if (!res.ok) {
-    throw new Error('Failed to retrieve vault files');
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to retrieve vault files');
   }
   return res.json();
 }
@@ -76,7 +77,8 @@ export async function getDownloadLink(fileId: number): Promise<string> {
   const headers = await getAuthHeaders();
   const res = await fetch(`${API_BASE}/download/${fileId}`, { headers });
   if (!res.ok) {
-    throw new Error('Failed to generate download ticket');
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to generate download ticket');
   }
   const data = await res.json();
   if (data.error) {
@@ -109,7 +111,8 @@ export async function searchVault(query: string): Promise<FileRecord[]> {
   const headers = await getAuthHeaders();
   const res = await fetch(`${API_BASE}/search/?query=${encodeURIComponent(query)}`, { headers });
   if (!res.ok) {
-    throw new Error('Failed to query semantic search engine');
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to query semantic search engine');
   }
   const data = await res.json();
   if (data.error) {
@@ -148,7 +151,16 @@ export function uploadFileWithProgress(
             resolve({ message: 'Upload completed' });
           }
         } else {
-          reject(new Error(`Server responded with code ${xhr.status}`));
+          let detail = `Server responded with code ${xhr.status}`;
+          try {
+            const errObj = JSON.parse(xhr.responseText);
+            if (errObj && (errObj.detail || errObj.message || errObj.error)) {
+              detail = errObj.detail || errObj.message || errObj.error;
+            }
+          } catch (e) {
+            // keep generic error
+          }
+          reject(new Error(detail));
         }
       });
 
@@ -178,4 +190,20 @@ export function uploadFileWithProgress(
     promise,
     abort: () => xhr.abort(),
   };
+}
+
+export interface FileStatusRecord {
+  id: number;
+  tags: any;
+}
+
+export async function fetchFilesStatus(ids: number[]): Promise<FileStatusRecord[]> {
+  if (ids.length === 0) return [];
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${API_BASE}/files/status/?ids=${ids.join(',')}`, { headers });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to retrieve file statuses');
+  }
+  return res.json();
 }
